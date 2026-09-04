@@ -15,6 +15,7 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
+// 预计算行星位置，避免重复计算
 function positionOf(b: CelestialBody, days: number): [number, number] {
   if (b.orbitRx === 0) return [CX, CY];
   const ang = b.startAngle - (days / b.periodDays) * TAU;
@@ -33,6 +34,26 @@ function ringFront(px: number, py: number, R: number, S: number, deg: number): s
   return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${R} ${S} ${deg} 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
 }
 
+// 预计算小行星带数据生成器
+const createBeltData = (() => {
+  let s = 20260207;
+  const rand = () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+  return () =>
+    Array.from({ length: 150 }, () => {
+      const r = 158 + rand() * 40;
+      const a = rand() * TAU;
+      return {
+        x: CX + Math.cos(a) * r,
+        y: CY + Math.sin(a) * r * K,
+        r: 0.5 + rand() * 0.95,
+        o: 0.2 + rand() * 0.42,
+      };
+    });
+})();
+
 export default function SolarSystem({
   days,
   selectedId,
@@ -43,27 +64,25 @@ export default function SolarSystem({
 }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  const belt = useMemo(() => {
-    let s = 20260207;
-    const rand = () => {
-      s = (s * 16807) % 2147483647;
-      return (s - 1) / 2147483646;
-    };
-    return Array.from({ length: 150 }, () => {
-      const r = 158 + rand() * 40;
-      const a = rand() * TAU;
-      return {
-        x: CX + Math.cos(a) * r,
-        y: CY + Math.sin(a) * r * K,
-        r: 0.5 + rand() * 0.95,
-        o: 0.2 + rand() * 0.42,
-      };
-    });
-  }, []);
+  // 使用 useMemo 创建稳定的 belt 数据
+  const belt = useMemo(() => createBeltData(), []);
 
   const selected = selectedId !== null && selectedId !== "sun";
   const selBody = selected ? PLANETS.find((p) => p.id === selectedId) : undefined;
-  const selPos = selBody ? positionOf(selBody, days) : null;
+  
+  // 缓存选中行星的位置计算
+  const selPos = useMemo((): [number, number] | null => {
+    if (!selBody) return null;
+    return positionOf(selBody, days);
+  }, [selBody, days]);
+
+  // 缓存所有行星的位置计算
+  const planetPositions = useMemo(() => {
+    return PLANETS.map((b) => ({
+      id: b.id,
+      pos: positionOf(b, days),
+    }));
+  }, [days]);
 
   return (
     <svg
@@ -109,7 +128,8 @@ export default function SolarSystem({
 
       {/* 轨道线 */}
       {showOrbits &&
-        PLANETS.map((b) => {
+        planetPositions.map(({ id }) => {
+          const b = PLANETS.find((p) => p.id === id)!;
           const active = b.id === selectedId || b.id === hoveredId;
           return (
             <ellipse
@@ -199,11 +219,21 @@ export default function SolarSystem({
       </g>
 
       {/* 八大行星 */}
-      {PLANETS.map((b) => {
-        const [px, py] = positionOf(b, days);
+      {planetPositions.map(({ id, pos }) => {
+        const b = PLANETS.find((p) => p.id === id)!;
+        const [px, py] = pos;
         const active = b.id === selectedId || b.id === hoveredId;
         const R = b.radius;
         const bandCount = b.bands ?? 0;
+        
+        // 缓存月球位置计算（仅地球需要）
+        const moonPos = b.hasMoon ? (() => {
+          const ma = 2.1 - (days / 27.3) * TAU;
+          return {
+            x: px + Math.cos(ma) * 15,
+            y: py + Math.sin(ma) * 15 * K,
+          };
+        })() : null;
 
         return (
           <g
@@ -313,28 +343,22 @@ export default function SolarSystem({
             )}
 
             {/* 地球的月球 */}
-            {b.hasMoon &&
-              (() => {
-                const ma = 2.1 - (days / 27.3) * TAU;
-                const mx = px + Math.cos(ma) * 15;
-                const my = py + Math.sin(ma) * 15 * K;
-                return (
-                  <g>
-                    <ellipse
-                      cx={px}
-                      cy={py}
-                      rx={15}
-                      ry={15 * K}
-                      fill="none"
-                      stroke="#3a4a77"
-                      strokeWidth="0.7"
-                      strokeDasharray="2 3"
-                      opacity="0.55"
-                    />
-                    <circle cx={mx} cy={my} r={1.8} fill="#c9d2e8" />
-                  </g>
-                );
-              })()}
+            {b.hasMoon && moonPos && (
+              <g>
+                <ellipse
+                  cx={px}
+                  cy={py}
+                  rx={15}
+                  ry={15 * K}
+                  fill="none"
+                  stroke="#3a4a77"
+                  strokeWidth="0.7"
+                  strokeDasharray="2 3"
+                  opacity="0.55"
+                />
+                <circle cx={moonPos.x} cy={moonPos.y} r={1.8} fill="#c9d2e8" />
+              </g>
+            )}
 
             {/* 名称标签 */}
             {showLabels && (
